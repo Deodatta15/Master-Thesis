@@ -1,0 +1,202 @@
+import cv2
+import os
+import shutil
+import random
+import numpy as np
+from glob import glob
+import matplotlib.pyplot as plt
+%matplotlib inline
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from keras.layers import Input, Lambda, Dense, Flatten, GlobalAveragePooling2D
+from keras.models import Model
+from keras import applications
+from tensorflow.keras.applications import EfficientNetB0
+from keras.applications.EfficientNetB0 import preprocess_input
+from keras.preprocessing import image
+from keras.preprocessing.image import ImageDataGenerator
+from keras.models import Sequential
+from tensorflow.keras.layers import Activation, Dense, BatchNormalization, Conv2D, MaxPool2D,Dropout
+from tensorflow.keras.metrics import categorical_crossentropy
+from tensorflow.keras.preprocessing.image import array_to_img
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing.image import load_img
+from keras.preprocessing import image
+from sklearn.metrics import confusion_matrix
+from keras.models import load_model
+import matplotlib.image as mpimg
+from keras.callbacks import ModelCheckpoint
+
+
+########################## Pre-training ###################################
+
+########################## LOAD DATA ###################################
+image_size = (224, 224)
+batch_size = 64
+
+train_ds = tf.keras.preprocessing.image_dataset_from_directory(
+    "Path to the folder",
+    labels="inferred",
+    validation_split=None,
+    shuffle=True,
+    seed=123,
+    image_size=image_size,
+    batch_size=batch_size,
+)
+val_ds = tf.keras.preprocessing.image_dataset_from_directory(
+    "Path to the folder",
+    labels="inferred",
+    validation_split=None,
+    shuffle=True,
+    seed=123,
+    image_size=image_size,
+    batch_size=batch_size,
+)
+
+test_ds = tf.keras.preprocessing.image_dataset_from_directory(
+    "Path to the folder",
+    batch_size=batch_size,
+    image_size=image_size,
+    shuffle=False
+  )
+
+########################## preprocessing and data augmentation ###################################
+train_datagen = ImageDataGenerator(preprocessing_function=tf.keras.applications.efficientnet.preprocess_input, 
+                             rotation_range = 45,  
+                             shear_range = 0.2,
+                             horizontal_flip = True,
+                             vertical_flip= True,
+                             brightness_range=[0.5, 1.5], 
+                             fill_mode = 'nearest')
+train_generator = train_datagen.flow_from_directory(
+       "Path to the folder",
+        target_size=(224, 224),
+        batch_size=64,
+        class_mode='binary')
+
+valid_datagen = ImageDataGenerator(preprocessing_function=tf.keras.applications.efficientnet.preprocess_input)
+validation_generator = valid_datagen.flow_from_directory(
+        "Path to the folder",
+        target_size=(224, 224),
+        batch_size=64,
+        class_mode='binary')
+
+test_datagen = ImageDataGenerator(preprocessing_function=tf.keras.applications.efficientnet.preprocess_input)
+test_generator = test_datagen.flow_from_directory(
+        "Path to the folder",
+        target_size=(224, 224),
+        batch_size=64,
+        shuffle = False,
+        class_mode='binary')
+
+########################## Build base model ###################################
+
+base_model = keras.applications.EfficientNetB0(
+    weights="imagenet",  # Load weights pre-trained on ImageNet.
+    input_shape=(224, 224, 3),
+    include_top=False, 
+    drop_connect_rate=0.4
+)  # Do not include the ImageNet classifier at the top.
+
+ # Freeze the pretrained weights
+base_model.trainable = False
+
+# Freeze the base_model
+#for layer in base_model.layers:
+#    layer.trainable = False
+
+# Rebuild top
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+x = x = Dropout(0.5)(x)
+predictions = Dense(1, activation='sigmoid')(x)
+
+# this is the model we will train
+model = Model(inputs=base_model.input, outputs=predictions)
+
+model.summary()
+
+########################## Compile model ###################################
+model.compile(
+    optimizer=keras.optimizers.Adam(lr=0.001),
+    loss=keras.losses.BinaryCrossentropy(from_logits=True),
+    metrics=[keras.metrics.BinaryAccuracy()],
+)
+
+########################## Fit model ###################################
+from keras.callbacks import ModelCheckpoint, CSVLogger
+csv_logger = CSVLogger('path tosave log file')
+
+history = model.fit(train_generator, epochs=50, validation_data=validation_generator, workers=16, 
+          steps_per_epoch= 6618// batch_size, 
+          verbose=1,  
+          validation_steps=1419 // batch_size,
+          callbacks=[csv_logger]) 
+model.save("path to save model")
+
+########################## Fine-tuning ###################################
+
+
+
+########################## Load pre-trined model ###################################
+
+from tensorflow.keras.models import load_model
+model = load_model('Path to the model', compile = True)
+
+
+for i, layer in enumerate(model.layers):
+   print(i, layer.name)
+
+
+
+# we chose to train the top 1 block, 
+for layer in model.layers[:221]:
+   layer.trainable = False
+for layer in model.layers[221:]:
+   layer.trainable = True
+
+
+def unfreeze_model(model):
+    # We unfreeze the top 20 layers while leaving BatchNorm layers frozen
+    for layer in model.layers[-20:]:
+        if not isinstance(layer, layers.BatchNormalization):
+            layer.trainable = True
+
+unfreeze_model(model)
+
+# Make sure you have frozen the correct layers
+for i, layer in enumerate(model.layers):
+    print(i, layer.name, layer.trainable) 
+
+   
+# we need to recompile the model for these modifications to take effect
+# we use SGD with a low learning rate
+model.compile(
+    optimizer=keras.optimizers.SGD(learning_rate=0.0001, momentum=0.9, nesterov=True),
+    loss=keras.losses.BinaryCrossentropy(from_logits=True),
+    metrics=[keras.metrics.BinaryAccuracy()],
+)
+
+# we train our model again 
+from keras.callbacks import ModelCheckpoint, CSVLogger
+csv_logger = CSVLogger('path to save log file')
+
+history = model.fit(train_generator, epochs=30, validation_data=validation_generator, workers=16, 
+          steps_per_epoch= 6618// batch_size, 
+          verbose=1,  
+          validation_steps=1419 // batch_size,
+          callbacks=[csv_logger]) 
+model.save("path to save model")
+
+
+########################## Prediction on test data ###################################
+
+
+test_generator.reset()
+Prediction = model.predict(test_generator)
+
+
+
+
