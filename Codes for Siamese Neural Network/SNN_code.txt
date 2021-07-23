@@ -1,0 +1,168 @@
+#################### Import Libraries ######################
+
+import cv2
+import os
+import random
+import numpy as np
+from glob import glob
+import matplotlib.pyplot as plt
+%matplotlib inline
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Activation, Dense, Flatten, BatchNormalization, Conv2D, MaxPool2D,Dropout
+from keras.layers import Input, Lambda, Dense, Flatten, GlobalAveragePooling2D
+from keras.models import Model
+from keras import applications
+from keras.preprocessing import image
+from keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.metrics import categorical_crossentropy
+from tensorflow.keras.preprocessing.image import array_to_img
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing.image import load_img
+from keras.models import load_model
+from keras.callbacks import ModelCheckpoint
+from keras import backend as K
+from keras.applications import resnet50
+from keras.applications.resnet50 import preprocess_input
+from keras.callbacks import ModelCheckpoint, TensorBoard, CSVLogger, EarlyStopping
+
+###################### Build SNN #############################
+
+# We have 2 inputs, 1 for each picture
+left_input = Input((224,224,3))
+right_input = Input((224,224,3))
+
+base_model =keras.applications.ResNet50(weights='imagenet', include_top=False, input_shape=(224,224,3))
+
+# Add the final fully connected layers
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+preds = Dense(16, activation='sigmoid')(x) # Apply sigmoid
+base_model = Model(inputs=base_model.input, outputs=preds)
+
+# Connect each 'leg' of the network to each input
+# Remember, they have the same weights
+encoded_l = base_model(left_input)
+encoded_r = base_model(right_input)
+
+# Getting the L1 Distance between the 2 encodings
+L1_layer = Lambda(lambda tensor:K.abs(tensor[0] - tensor[1]))
+
+# Add the distance function to the network
+L1_distance = L1_layer([encoded_l, encoded_r])
+
+prediction = Dense(1,activation='sigmoid')(L1_distance)
+siamese_net = Model(inputs=[left_input,right_input],outputs=prediction)
+
+####################### Compile model  ######################
+
+siamese_net.compile(
+    optimizer=keras.optimizers.Adam(lr=0.0001),
+    loss=keras.losses.BinaryCrossentropy(from_logits=True),
+    metrics=['accuracy'],
+)
+
+
+
+############## Loading the data ###############################
+
+
+labels = ['bad', 'good']
+img_size = 224
+def get_data(data_dir):
+    data = [] 
+    for label in labels: 
+        path = os.path.join(data_dir, label)
+        class_num = labels.index(label)
+        for img in os.listdir(path):
+            try:
+                img_arr = cv2.imread(os.path.join(path, img))[...,::-1] #convert BGR to RGB format
+                resized_arr = cv2.resize(img_arr, (img_size, img_size)) # Reshaping images to preferred size
+                data.append([resized_arr, class_num])
+            except Exception as e:
+                print(e)
+    return np.array(data)
+	
+#Now we can easily fetch our train data.
+train = get_data('path to images')
+
+
+################## Data Preprocessing #####################
+img_size = 224
+x_train = []
+y_train = []
+
+for feature, label in train:
+  x_train.append(feature)
+  y_train.append(label)
+
+# Normalize the data
+x_train = np.array(x_train,dtype="int8" ) 
+#preprocess for Resnet- 50
+x_train =  preprocess_input(x_train)
+y_train = np.array(y_train)
+
+
+##################### Create Train and test set ###################
+image_list = x_train[:180]
+label_list = y_train[:180]
+
+left_input = []
+right_input = []
+targets = []
+#Number of pairs per image
+pairs = 1
+#create the dataset to train on
+for i in range(len(image_list)):
+    for j in range(pairs):
+# we need to make sure that we are not comparing with the same image
+        compare_to = i
+        while compare_to == i: 
+            compare_to = random.randint(0,179)
+        left_input.append(image_list[i])
+        right_input.append(image_list[compare_to])
+        if label_list[i] == label_list[compare_to]:
+            # if the images are same then label - 1
+            targets.append(1.)
+        else:
+            # if the images are different then label - 0
+            targets.append(0.)
+            
+
+#the train data - left right images arrays and target label
+left_input = np.array(left_input)
+right_input = np.array(right_input)
+targets =np.array(targets)
+
+left_input = np.squeeze(np.array(left_input))
+right_input = np.squeeze(np.array(right_input))
+targets = np.squeeze(np.array(targets))
+
+# Creating test datasets - left, right images and target label
+good_image = x_train[100] #good_image = 1, bad_image = 0
+
+test_left = []
+test_right = []
+test_targets = []
+
+for i in range(len(y_train)-179):
+    test_left.append(good_image)
+    test_right.append(x_train[i+179])
+    test_targets.append(y_train[i+179])
+
+
+
+test_left = np.squeeze(np.array(test_left))
+test_right = np.squeeze(np.array(test_right))
+test_targets = np.squeeze(np.array(test_targets))
+ 
+
+####################### Fit the model ################################
+history = siamese_net.fit([left_input,right_input], targets,
+          batch_size=16,
+          epochs=14,
+          verbose=1,
+          validation_data=([test_left,test_right],test_targets))
+siamese_net.save("path to model")

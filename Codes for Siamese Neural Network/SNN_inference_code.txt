@@ -1,0 +1,83 @@
+################Import Libraries##################
+import cv2
+import os
+import random
+import numpy as np
+from glob import glob
+import matplotlib.pyplot as plt
+%matplotlib inline
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Activation, Dense, Flatten, BatchNormalization, Conv2D, MaxPool2D,Dropout
+from keras.layers import Input, Lambda, Dense, Flatten, GlobalAveragePooling2D
+from keras.models import Model
+from keras import applications
+from keras.preprocessing import image
+from keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.metrics import categorical_crossentropy
+from tensorflow.keras.preprocessing.image import array_to_img
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing.image import load_img
+from keras.models import load_model
+from keras.callbacks import ModelCheckpoint
+from keras import backend as K
+from keras.applications import resnet50
+from keras.applications.resnet50 import preprocess_input
+from keras.callbacks import ModelCheckpoint, TensorBoard, CSVLogger
+
+#####################Load Model########################
+from tensorflow.keras.models import load_model
+model = load_model('Path to the model', compile = True)
+
+
+######################### Load Data #####################
+img_size = 224
+def get_data(data_dir):
+    data = []
+    path = "Path to the directory"
+    for img in os.listdir(path):
+        try:
+            img_arr = cv2.imread(os.path.join(path, img))[...,::-1] #convert BGR to RGB format
+            resized_arr = cv2.resize(img_arr, (img_size, img_size)) # Reshaping images to preferred size
+            data.append([resized_arr])
+        except Exception as e:
+            print(e)
+    return np.array(data)
+
+test = get_data('Path to the directory')	
+
+######################## Preprocess data #########################
+x_test = []
+for feature in test:
+    x_test.append(feature)
+    #y_test.append(label)  
+x_test = np.array(x_test, dtype="int8")     
+x_test =  preprocess_input(x_test)
+
+
+image_list = x_test
+left_input = []
+right_input = []
+#Number of pairs per image
+pairs = 1
+#create the dataset to test on
+for i in range(len(image_list)):
+    for j in range(pairs):
+# we need to make sure that we are not comparing with the same image
+        compare_to = i
+        while compare_to == i: 
+            compare_to = random.randint(0,1)
+        left_input.append(image_list[i])
+        right_input.append(image_list[compare_to])
+
+left_input = np.array(left_input)
+right_input = np.array(right_input)
+left_input = np.squeeze(np.array(left_input))
+right_input = np.squeeze(np.array(right_input))
+
+################# Inference ###########################
+preds = model.predict([left_input, right_input])
+
+preds[0][0]
